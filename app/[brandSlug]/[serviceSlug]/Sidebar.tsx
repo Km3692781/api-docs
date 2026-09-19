@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { TreeNode } from "@/lib/postman-normalize";
 import type { GuidePage } from "@/lib/postman-normalize";
 import type { DocsSection } from "./SectionTabs";
+import BrandLogo from "./BrandLogo";
 
 interface SidebarProps {
   rootName: string;
@@ -136,12 +137,7 @@ export default function Sidebar({
       <div className="docs-sidebar-header">
         <div className="docs-sidebar-logo-row">
           {logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={logoUrl}
-              alt={brandName}
-              className="docs-sidebar-logo"
-            />
+            <BrandLogo src={logoUrl} alt={brandName} className="docs-sidebar-logo" />
           ) : (
             <span style={{ fontWeight: 700, fontSize: "16px", letterSpacing: "-0.01em" }}>
               {brandName}

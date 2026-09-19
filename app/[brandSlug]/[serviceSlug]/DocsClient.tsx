@@ -102,15 +102,26 @@ export default function DocsClient({
 
   useEffect(() => {
     if (!hasLogo) return;
-    const href = `/api/brands/${brandSlug}/logo?variant=icon`;
-    let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
-    if (!link) {
-      link = document.createElement("link");
-      link.rel = "icon";
-      document.head.appendChild(link);
-    }
-    link.type = "image/png";
-    link.href = href;
+    const src = `/api/brands/${brandSlug}/logo`;
+    let cancelled = false;
+
+    import("@/lib/crop-logo-client").then(({ cropLogoIcon }) => {
+      cropLogoIcon(src, 64).then((dataUrl) => {
+        if (cancelled || !dataUrl) return;
+        let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
+        if (!link) {
+          link = document.createElement("link");
+          link.rel = "icon";
+          document.head.appendChild(link);
+        }
+        link.type = "image/png";
+        link.href = dataUrl;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [hasLogo, brandSlug]);
 
   const derived = useMemo(() => deriveTheme(theme, mode), [theme, mode]);

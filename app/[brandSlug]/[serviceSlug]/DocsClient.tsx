@@ -109,7 +109,7 @@ export default function DocsClient({
       link.rel = "icon";
       document.head.appendChild(link);
     }
-    link.type = "image/svg+xml";
+    link.type = "image/png";
     link.href = href;
   }, [hasLogo, brandSlug]);
 

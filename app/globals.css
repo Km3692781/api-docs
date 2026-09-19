@@ -405,9 +405,9 @@ html, body {
 }
 
 .docs-sidebar-logo {
-  height: 34px;
+  height: 40px;
   width: auto;
-  max-width: 150px;
+  max-width: 168px;
   object-fit: contain;
   object-position: left center;
   display: block;

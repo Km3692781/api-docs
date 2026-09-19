@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
-
-const ICON_SIZE = 64;
+import {
+  makeLogoIcon,
+  parseDataUri,
+  trimLogoBuffer,
+} from "@/lib/logo-process";
 
 export async function GET(
   req: NextRequest,
@@ -20,36 +23,23 @@ export async function GET(
   }
 
   const dataUri: string = result.rows[0].logo_base64;
-
-  // Favicon / tab icon: wrap in a fixed-size SVG so tiny uploads still fill the icon.
-  if (variant === "icon") {
-    const escaped = dataUri
-      .replace(/&/g, "&amp;")
-      .replace(/"/g, "&quot;")
-      .replace(/</g, "&lt;");
-
-    const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${ICON_SIZE}" height="${ICON_SIZE}" viewBox="0 0 ${ICON_SIZE} ${ICON_SIZE}">
-  <image width="${ICON_SIZE}" height="${ICON_SIZE}" preserveAspectRatio="xMidYMid meet" href="${escaped}"/>
-</svg>`;
-
-    return new NextResponse(svg, {
-      headers: {
-        "Content-Type": "image/svg+xml; charset=utf-8",
-        "Cache-Control": "public, max-age=86400",
-      },
-    });
+  const parsed = parseDataUri(dataUri);
+  if (!parsed) {
+    return new NextResponse(null, { status: 500 });
   }
 
-  // dataUri is like: data:image/png;base64,XXXX
-  const [meta, base64Data] = dataUri.split(",");
-  const mimeType = meta.split(":")[1].split(";")[0];
-  const buffer = Buffer.from(base64Data, "base64");
+  // Trim padding on the fly so already-uploaded logos (with empty canvas
+  // space) still fill the sidebar / favicon without a re-upload.
+  const processed =
+    variant === "icon"
+      ? await makeLogoIcon(parsed.buffer, parsed.mimeType, 64)
+      : await trimLogoBuffer(parsed.buffer, parsed.mimeType);
 
-  return new NextResponse(buffer, {
+  return new NextResponse(new Uint8Array(processed.buffer), {
     headers: {
-      "Content-Type": mimeType,
-      "Cache-Control": "public, max-age=86400",
+      "Content-Type": processed.mimeType,
+      // Short cache: processing is cheap and logo updates should show quickly
+      "Cache-Control": "public, max-age=300",
     },
   });
 }

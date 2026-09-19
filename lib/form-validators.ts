@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { bufferToDataUri, trimLogoBuffer } from "@/lib/logo-process";
 
 export const RESERVED_BRAND_SLUGS = ["api", "admin", "_next", "favicon.ico"];
 
@@ -93,9 +94,9 @@ export async function parseLogoFile(
       { status: 400 }
     );
   }
-  const buffer = await logoFile.arrayBuffer();
-  const base64 = Buffer.from(buffer).toString("base64");
-  return `data:${logoFile.type};base64,${base64}`;
+  const raw = Buffer.from(await logoFile.arrayBuffer());
+  const processed = await trimLogoBuffer(raw, logoFile.type);
+  return bufferToDataUri(processed.buffer, processed.mimeType);
 }
 
 export function isPgUniqueViolation(err: unknown): boolean {

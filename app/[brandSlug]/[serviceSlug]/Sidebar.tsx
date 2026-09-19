@@ -140,7 +140,7 @@ export default function Sidebar({
             <img
               src={logoUrl}
               alt={brandName}
-              style={{ maxHeight: "34px", maxWidth: "150px", objectFit: "contain" }}
+              className="docs-sidebar-logo"
             />
           ) : (
             <span style={{ fontWeight: 700, fontSize: "16px", letterSpacing: "-0.01em" }}>

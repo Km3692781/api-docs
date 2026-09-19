@@ -404,6 +404,16 @@ html, body {
   min-height: 56px;
 }
 
+.docs-sidebar-logo {
+  height: 34px;
+  width: auto;
+  max-width: 150px;
+  object-fit: contain;
+  object-position: left center;
+  display: block;
+  flex-shrink: 1;
+}
+
 .docs-theme-toggle {
   margin-left: auto;
   border: none;

@@ -102,13 +102,14 @@ export default function DocsClient({
 
   useEffect(() => {
     if (!hasLogo) return;
-    const href = `/api/brands/${brandSlug}/logo`;
+    const href = `/api/brands/${brandSlug}/logo?variant=icon`;
     let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
     if (!link) {
       link = document.createElement("link");
       link.rel = "icon";
       document.head.appendChild(link);
     }
+    link.type = "image/svg+xml";
     link.href = href;
   }, [hasLogo, brandSlug]);
 

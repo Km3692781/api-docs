@@ -240,6 +240,11 @@ export function normalizeAllowlistForStorage(
  * Filter collection by path allowlist (up to 3 layers).
  * Granting a path includes that folder and all deeper content.
  * "parent/all" includes every direct child of parent (full subtrees).
+ *
+ * Partial ancestor folders (kept only to reach a deeper grant) are retained
+ * as structural shells with descriptions cleared, so overview text cannot
+ * mention siblings the client is not allowed to see. Collection root
+ * description is also cleared when access is scoped.
  */
 export function filterCollectionByAllowlist(
   collection: PostmanCollection,
@@ -252,6 +257,11 @@ export function filterCollectionByAllowlist(
 
   return {
     ...collection,
+    info: {
+      ...collection.info,
+      // Scoped views must not surface the global overview guide
+      description: undefined,
+    },
     item: items,
   };
 }
@@ -286,8 +296,10 @@ function filterItemList(
     const childItems = filterItemList(node.item ?? [], path, rules);
     if (childItems.length === 0) continue;
 
+    // Structural shell only — drop overview copy that may name hidden siblings
     out.push({
       ...node,
+      description: undefined,
       item: childItems,
     });
   }

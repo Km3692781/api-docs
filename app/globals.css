@@ -400,7 +400,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 20px 16px 12px;
+  padding: 20px 16px 24px;
   min-height: 56px;
 }
 
@@ -995,13 +995,13 @@ html, body {
 }
 
 .docs-slide-page {
-  animation: docs-slide-up 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  animation: docs-slide-up 0.65s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes docs-slide-up {
   0% {
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(22px);
   }
   100% {
     opacity: 1;
@@ -1014,7 +1014,7 @@ html, body {
   overflow: hidden;
 }
 .docs-turn-page {
-  animation: docs-slide-up 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  animation: docs-slide-up 0.65s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* ===== Request grid: reset padding (moved to outer) ===== */

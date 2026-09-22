@@ -19,8 +19,8 @@ export default function GuidesView({ guide }: { guide: GuidePage | null }) {
 
   return (
     <div className="docs-guides-outer">
-      <div className="docs-turn-scene">
-        <article className="docs-turn-page docs-content-block" key={guide.slug}>
+      <div className="docs-slide-scene">
+        <article className="docs-slide-page docs-content-block" key={guide.slug}>
           <h1 className="docs-page-title">{guide.title}</h1>
           <div className="markdown-body">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>

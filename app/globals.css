@@ -749,7 +749,9 @@ html, body {
   .docs-fade-slide,
   .docs-folder-children,
   .docs-backdrop,
-  .docs-copy-btn-done {
+  .docs-copy-btn-done,
+  .docs-slide-page,
+  .docs-turn-page {
     animation: none !important;
   }
   .docs-sidebar,
@@ -987,29 +989,32 @@ html, body {
 
 .docs-view-select:focus { border-color: var(--brand-primary); }
 
-/* ===== Page-turn animation ===== */
-.docs-turn-scene {
-  perspective: 2200px;
+/* ===== Slide-up animation ===== */
+.docs-slide-scene {
+  overflow: hidden;
 }
 
-.docs-turn-page {
-  transform-origin: left center;
-  animation: docs-page-turn 0.6s cubic-bezier(0.4, 0.15, 0.2, 1);
-  backface-visibility: hidden;
+.docs-slide-page {
+  animation: docs-slide-up 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@keyframes docs-page-turn {
+@keyframes docs-slide-up {
   0% {
     opacity: 0;
-    transform: rotateY(-18deg) translateX(-14px);
-  }
-  60% {
-    opacity: 1;
+    transform: translateY(18px);
   }
   100% {
     opacity: 1;
-    transform: rotateY(0deg) translateX(0);
+    transform: translateY(0);
   }
+}
+
+/* Legacy aliases (if any leftover class names) */
+.docs-turn-scene {
+  overflow: hidden;
+}
+.docs-turn-page {
+  animation: docs-slide-up 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* ===== Request grid: reset padding (moved to outer) ===== */
@@ -1077,6 +1082,74 @@ html, body {
 
 .docs-download-btn:active {
   transform: scale(0.98);
+}
+
+/* ===== Custom docs 404 ===== */
+.docs-not-found {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background: #faf9f7;
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.docs-not-found-card {
+  max-width: 440px;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #e6e3dd;
+  border-radius: 14px;
+  padding: 36px 28px;
+  box-shadow: 0 6px 20px rgba(28, 25, 23, 0.08);
+  text-align: center;
+}
+
+.docs-not-found-code {
+  margin: 0 0 8px;
+  font-family: var(--font-mono), monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #6b6862;
+}
+
+.docs-not-found-title {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #1f1d1a;
+}
+
+.docs-not-found-body {
+  margin: 0 0 24px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: #6b6862;
+}
+
+.docs-not-found-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: #1f1d1a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  transition: transform 0.08s ease, opacity 0.15s;
+}
+
+.docs-not-found-link:hover {
+  opacity: 0.9;
+}
+
+.docs-not-found-link:active {
+  transform: scale(0.97);
 }
 
 /* ===== Section topbar pills ===== */
@@ -1554,7 +1627,9 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   .docs-fade-slide,
-  .docs-changelog-entry {
+  .docs-changelog-entry,
+  .docs-slide-page,
+  .docs-turn-page {
     animation: none !important;
   }
 }

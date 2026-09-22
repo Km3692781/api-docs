@@ -33,6 +33,35 @@ CREATE TABLE IF NOT EXISTS api_docs.service_versions (
 CREATE INDEX IF NOT EXISTS service_versions_service_created_idx
   ON api_docs.service_versions (service_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS api_docs.doc_clients (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id          UUID NOT NULL REFERENCES api_docs.brands(id) ON DELETE CASCADE,
+  service_id        UUID NOT NULL REFERENCES api_docs.services(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  folder_allowlist  JSONB NOT NULL DEFAULT '[]',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS doc_clients_brand_service_idx
+  ON api_docs.doc_clients (brand_id, service_id);
+
+CREATE INDEX IF NOT EXISTS doc_clients_service_idx
+  ON api_docs.doc_clients (service_id);
+
+CREATE OR REPLACE FUNCTION api_docs.doc_clients_set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS doc_clients_updated_at ON api_docs.doc_clients;
+CREATE TRIGGER doc_clients_updated_at
+BEFORE UPDATE ON api_docs.doc_clients
+FOR EACH ROW EXECUTE FUNCTION api_docs.doc_clients_set_updated_at();
+
 CREATE OR REPLACE FUNCTION api_docs.update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN

@@ -18,6 +18,8 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "API Docs",
   description: "API Documentation",
+  // Prevent Next from inventing a default favicon; brand pages set their own.
+  icons: {},
 };
 
 export default function RootLayout({

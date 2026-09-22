@@ -30,11 +30,13 @@ interface DocsClientProps {
   brandName: string;
   brandSlug: string;
   serviceSlug: string;
+  clientId: string;
   hasLogo: boolean;
   theme: BrandColors;
   serviceName: string;
   collection: PostmanCollection;
   changelog: ChangelogEntry[];
+  accessScoped?: boolean;
 }
 
 function parseHash(hash: string): {
@@ -82,11 +84,13 @@ export default function DocsClient({
   brandName,
   brandSlug,
   serviceSlug,
+  clientId,
   hasLogo,
   theme,
   serviceName,
   collection,
   changelog,
+  accessScoped = false,
 }: DocsClientProps) {
   const [mode, setMode] = useState<ThemeMode>("light");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -102,20 +106,32 @@ export default function DocsClient({
 
   useEffect(() => {
     if (!hasLogo) return;
-    const src = `/api/brands/${brandSlug}/logo`;
+    const logoSrc = `/api/brands/${brandSlug}/logo`;
+    const iconSrc = `/api/brands/${brandSlug}/logo?variant=icon`;
     let cancelled = false;
 
+    const applyFavicon = (href: string) => {
+      // Remove every icon link Next/browser may have injected (e.g. /icon.png)
+      document
+        .querySelectorAll<HTMLLinkElement>(
+          "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']"
+        )
+        .forEach((el) => el.remove());
+
+      const link = document.createElement("link");
+      link.rel = "icon";
+      link.type = "image/png";
+      link.href = href;
+      document.head.appendChild(link);
+    };
+
+    // Immediate brand favicon so reload never flashes/sticks on a default icon
+    applyFavicon(iconSrc);
+
     import("@/lib/crop-logo-client").then(({ cropLogoIcon }) => {
-      cropLogoIcon(src, 64).then((dataUrl) => {
+      cropLogoIcon(logoSrc, 64).then((dataUrl) => {
         if (cancelled || !dataUrl) return;
-        let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
-        if (!link) {
-          link = document.createElement("link");
-          link.rel = "icon";
-          document.head.appendChild(link);
-        }
-        link.type = "image/png";
-        link.href = dataUrl;
+        applyFavicon(dataUrl);
       });
     });
 
@@ -132,6 +148,9 @@ export default function DocsClient({
     [tree]
   );
   const hasGuides = guides.length > 0;
+  const hasSections =
+    tree.nodes.length > 0 || !!tree.rootDescription?.trim();
+  const isEmptyAccess = accessScoped && tree.nodes.length === 0;
 
   const [selectedId, setSelectedId] = useState<string>(
     () => findFirstRequest(tree.nodes)?.id ?? ""
@@ -341,7 +360,7 @@ export default function DocsClient({
         mode={mode}
         onToggleMode={() => setMode((m) => (m === "light" ? "dark" : "light"))}
         isOpen={sidebarOpen}
-        downloadUrl={`/api/brands/${brandSlug}/services/${serviceSlug}/download`}
+        downloadUrl={`/api/brands/${brandSlug}/services/${serviceSlug}/clients/${clientId}/download`}
         foldersSelectable={false}
         section={section}
         guides={guides}
@@ -379,37 +398,51 @@ export default function DocsClient({
           <SectionTabs
             active={section}
             onChange={handleSectionChange}
-            hasGuides={hasGuides}
+            hasGuides={hasGuides && !isEmptyAccess}
           />
         </div>
 
-        {section === "reference" &&
-          (selectedNode?.kind === "request" ? (
-            <RequestView
-              node={selectedNode}
-              serviceName={serviceName}
-              derived={derived}
-              ancestors={ancestors}
-              slug={slugMaps.idToSlug[selectedNode.id]}
-              view={view}
-              onViewChange={setView}
-            />
-          ) : (
-            <div className="docs-content-block docs-fade-slide">
-              <h1 className="docs-page-title">{serviceName}</h1>
-              <p className="docs-empty-note">
-                Select an endpoint from the sidebar to view its documentation.
-              </p>
-            </div>
-          ))}
+        {isEmptyAccess ? (
+          <div className="docs-content-block docs-fade-slide">
+            <h1 className="docs-page-title">No sections available</h1>
+            <p className="docs-empty-note">
+              This access link does not include any folders that exist in the
+              current API collection. Contact your provider if you need access.
+            </p>
+          </div>
+        ) : (
+          <>
+            {section === "reference" &&
+              (selectedNode?.kind === "request" ? (
+                <RequestView
+                  node={selectedNode}
+                  serviceName={serviceName}
+                  derived={derived}
+                  ancestors={ancestors}
+                  slug={slugMaps.idToSlug[selectedNode.id]}
+                  view={view}
+                  onViewChange={setView}
+                />
+              ) : (
+                <div className="docs-content-block docs-fade-slide">
+                  <h1 className="docs-page-title">{serviceName}</h1>
+                  <p className="docs-empty-note">
+                    {hasSections
+                      ? "Select an endpoint from the sidebar to view its documentation."
+                      : "No sections available."}
+                  </p>
+                </div>
+              ))}
 
-        {section === "guides" && <GuidesView guide={selectedGuide} />}
+            {section === "guides" && <GuidesView guide={selectedGuide} />}
 
-        {section === "explorer" && (
-          <ExplorerView nodes={tree.nodes} selectedId={selectedId} />
+            {section === "explorer" && (
+              <ExplorerView nodes={tree.nodes} selectedId={selectedId} />
+            )}
+
+            {section === "changelog" && <ChangelogView entries={changelog} />}
+          </>
         )}
-
-        {section === "changelog" && <ChangelogView entries={changelog} />}
       </main>
 
       <button

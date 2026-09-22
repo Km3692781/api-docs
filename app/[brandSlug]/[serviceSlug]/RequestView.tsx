@@ -54,10 +54,10 @@ export default function RequestView({
         </div>
       </div>
 
-      {/* Page-turn wrapper: re-mounts on request or view change */}
-      <div className="docs-turn-scene">
+      {/* Slide-up wrapper: re-mounts on request or view change */}
+      <div className="docs-slide-scene">
         <div
-          className="docs-turn-page"
+          className="docs-slide-page"
           key={`${node.id}-${view}`}
         >
           <div

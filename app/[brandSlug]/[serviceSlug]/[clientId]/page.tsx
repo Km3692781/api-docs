@@ -25,7 +25,7 @@ export async function generateMetadata({ params }: PageProps) {
   if (!isUuid(clientId)) return { title: "Not Found" };
 
   const result = await pool.query(
-    `SELECT b.name as brand_name, s.name as service_name, c.name as client_name,
+    `SELECT b.name as brand_name, s.name as service_name,
             (b.logo_base64 IS NOT NULL) AS has_logo
      FROM api_docs.doc_clients c
      JOIN api_docs.services s ON s.id = c.service_id
@@ -34,9 +34,9 @@ export async function generateMetadata({ params }: PageProps) {
     [brandSlug, serviceSlug, clientId]
   );
   if (result.rowCount === 0) return { title: "Not Found" };
-  const { brand_name, service_name, client_name, has_logo } = result.rows[0];
+  const { brand_name, service_name, has_logo } = result.rows[0];
   return {
-    title: `${service_name} — ${brand_name} (${client_name})`,
+    title: `${brand_name} — ${service_name}`,
     // Prefer brand logo over any default app icon so reloads stay consistent
     ...(has_logo
       ? {

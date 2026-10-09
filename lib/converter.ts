@@ -12,7 +12,10 @@ export async function convertPostmanToOpenApi(
   const inputPath = path.join(tmpDir, `postman-${timestamp}.json`);
   const outputPath = path.join(tmpDir, `openapi-${timestamp}.yaml`);
 
-  await fs.writeFile(inputPath, JSON.stringify(collection), "utf-8");
+  // postman-to-openapi calls String#split on descriptions. Postman v2.1
+  // often stores them as { content, type }. Flatten a copy only.
+  const flattened = flattenDescriptions(collection);
+  await fs.writeFile(inputPath, JSON.stringify(flattened), "utf-8");
 
   try {
     await postmanToOpenApi(inputPath, outputPath, { defaultTag: "General" });
@@ -28,6 +31,31 @@ export async function convertPostmanToOpenApi(
     await fs.unlink(inputPath).catch(() => {});
     await fs.unlink(outputPath).catch(() => {});
   }
+}
+
+function descriptionToString(desc: unknown): unknown {
+  if (desc == null || typeof desc === "string") return desc;
+  if (typeof desc === "object" && desc !== null && "content" in desc) {
+    const content = (desc as { content?: unknown }).content;
+    return typeof content === "string" ? content : "";
+  }
+  return desc;
+}
+
+function flattenDescriptions(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(flattenDescriptions);
+  if (!value || typeof value !== "object") return value;
+
+  const obj = value as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(obj)) {
+    if (key === "description") {
+      next[key] = descriptionToString(child);
+    } else {
+      next[key] = flattenDescriptions(child);
+    }
+  }
+  return next;
 }
 
 /**

@@ -6,22 +6,93 @@ import {
   parseThemeField,
   validateSlug,
 } from "@/lib/form-validators";
+import {
+  createApiLogger,
+  failResponse,
+  snapshotRequest,
+  withRequestId,
+} from "@/lib/api-logger";
+
+/** DELETE /api/brands/:brandSlug — cascades services, versions, clients */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ brandSlug: string }> }
+) {
+  const { brandSlug } = await params;
+  const log = createApiLogger("DELETE /api/brands/[brandSlug]", req, {
+    brandSlug,
+  });
+  log.ok("start", { brandSlug });
+
+  const snap = () => snapshotRequest(req, { params: { brandSlug } });
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM api_docs.brands
+       WHERE slug = $1
+       RETURNING id, slug, name`,
+      [brandSlug]
+    );
+
+    if (result.rowCount === 0) {
+      return failResponse(
+        log,
+        "db_delete",
+        new Error(`brand "${brandSlug}" not found`),
+        NextResponse.json(
+          { error: `brand "${brandSlug}" not found` },
+          { status: 404 }
+        ),
+        snap()
+      );
+    }
+
+    const brand = result.rows[0];
+    log.ok("db_delete", { brandId: brand.id, slug: brand.slug });
+    log.done(200, { brandId: brand.id });
+    return withRequestId(
+      NextResponse.json({ ok: true, brand }),
+      log.reqId
+    );
+  } catch (err) {
+    return failResponse(
+      log,
+      "db_delete",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
+    );
+  }
+}
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ brandSlug: string }> }
 ) {
   const { brandSlug } = await params;
+  const log = createApiLogger("PATCH /api/brands/[brandSlug]", req, {
+    brandSlug,
+  });
+  log.ok("start", { brandSlug });
 
   let formData: FormData;
   try {
     formData = await req.formData();
-  } catch {
-    return NextResponse.json(
-      { error: "Request must be multipart/form-data" },
-      { status: 400 }
+    log.ok("parse_form");
+  } catch (err) {
+    return failResponse(
+      log,
+      "parse_form",
+      err instanceof Error ? err : new Error("Request must be multipart/form-data"),
+      NextResponse.json(
+        { error: "Request must be multipart/form-data" },
+        { status: 400 }
+      ),
+      snapshotRequest(req, { params: { brandSlug } })
     );
   }
+
+  const snap = () => snapshotRequest(req, { params: { brandSlug }, formData });
 
   const name = formData.get("name");
   const slug = formData.get("slug");
@@ -38,36 +109,58 @@ export async function PATCH(
     clearLogo === "true" || clearLogo === "1" || clearLogo === "yes";
 
   if (!hasName && !hasSlug && !hasTheme && !hasLogo && !wantsClearLogo) {
-    return NextResponse.json(
-      {
-        error:
-          'Provide at least one of: name, slug, logo, theme, or clear_logo="true"',
-      },
-      { status: 400 }
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error(
+        'Provide at least one of: name, slug, logo, theme, or clear_logo="true"'
+      ),
+      NextResponse.json(
+        {
+          error:
+            'Provide at least one of: name, slug, logo, theme, or clear_logo="true"',
+        },
+        { status: 400 }
+      ),
+      snap()
     );
   }
 
   if (hasSlug) {
     const slugErr = validateSlug(slug as string, { reserved: true });
     if (slugErr) {
-      return NextResponse.json({ error: slugErr }, { status: 400 });
+      return failResponse(
+        log,
+        "validate_slug",
+        new Error(slugErr),
+        NextResponse.json({ error: slugErr }, { status: 400 }),
+        snap()
+      );
     }
   }
+  log.ok("validate_fields", { hasName, hasSlug, hasTheme, hasLogo, wantsClearLogo });
 
   let theme: { primary?: string; accent?: string } | undefined;
   if (hasTheme) {
     const parsed = parseThemeField(themeRaw);
-    if (parsed instanceof NextResponse) return parsed;
+    if (parsed instanceof NextResponse) {
+      return failResponse(log, "parse_theme", new Error("invalid theme"), parsed, snap());
+    }
     theme = parsed;
+    log.ok("parse_theme");
   }
 
   let logo_base64: string | null | undefined;
   if (wantsClearLogo) {
     logo_base64 = null;
+    log.ok("parse_logo", { clearLogo: true });
   } else if (hasLogo) {
     const parsed = await parseLogoFile(logoFile);
-    if (parsed instanceof NextResponse) return parsed;
+    if (parsed instanceof NextResponse) {
+      return failResponse(log, "parse_logo", new Error("invalid logo"), parsed, snap());
+    }
     logo_base64 = parsed;
+    log.ok("parse_logo", { hasLogo: true });
   }
 
   const existing = await pool.query(
@@ -77,11 +170,18 @@ export async function PATCH(
   );
 
   if (existing.rowCount === 0) {
-    return NextResponse.json(
-      { error: `brand "${brandSlug}" not found` },
-      { status: 404 }
+    return failResponse(
+      log,
+      "resolve_brand",
+      new Error(`brand "${brandSlug}" not found`),
+      NextResponse.json(
+        { error: `brand "${brandSlug}" not found` },
+        { status: 404 }
+      ),
+      snap()
     );
   }
+  log.ok("resolve_brand", { brandId: existing.rows[0].id });
 
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -115,16 +215,31 @@ export async function PATCH(
          (logo_base64 IS NOT NULL) AS has_logo`,
       values
     );
-
-    return NextResponse.json({ brand: result.rows[0] });
+    log.ok("db_update", { brandId: result.rows[0]?.id, slug: result.rows[0]?.slug });
+    log.done(200, { brandId: result.rows[0]?.id });
+    return withRequestId(
+      NextResponse.json({ brand: result.rows[0] }),
+      log.reqId
+    );
   } catch (err: unknown) {
     if (isPgUniqueViolation(err)) {
-      return NextResponse.json(
-        { error: `brand with slug "${slug}" already exists` },
-        { status: 409 }
+      return failResponse(
+        log,
+        "db_update",
+        err,
+        NextResponse.json(
+          { error: `brand with slug "${slug}" already exists` },
+          { status: 409 }
+        ),
+        snap()
       );
     }
-    console.error("Update brand error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return failResponse(
+      log,
+      "db_update",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
+    );
   }
 }

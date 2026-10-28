@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { convertPostmanToOpenApi } from "@/lib/converter";
 import { diffOpenApiSpecs, isEmptyDiff } from "@/lib/openapi-diff";
+import {
+  createApiLogger,
+  failResponse,
+  snapshotRequest,
+  withRequestId,
+} from "@/lib/api-logger";
 
 async function ensureVersionsTable() {
   await pool.query(`
@@ -20,63 +26,183 @@ async function ensureVersionsTable() {
   `);
 }
 
+/** GET /api/brands/:brandSlug/services — list services for a brand */
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ brandSlug: string }> }
+) {
+  const { brandSlug } = await params;
+  const log = createApiLogger(
+    "GET /api/brands/[brandSlug]/services",
+    req,
+    { brandSlug }
+  );
+  log.ok("start", { brandSlug });
+
+  const snap = () => snapshotRequest(req, { params: { brandSlug } });
+
+  try {
+    const brandResult = await pool.query(
+      `SELECT id FROM api_docs.brands WHERE slug = $1`,
+      [brandSlug]
+    );
+
+    if (brandResult.rowCount === 0) {
+      return failResponse(
+        log,
+        "resolve_brand",
+        new Error(`brand "${brandSlug}" not found`),
+        NextResponse.json(
+          { error: `brand "${brandSlug}" not found` },
+          { status: 404 }
+        ),
+        snap()
+      );
+    }
+
+    const brandId = brandResult.rows[0].id;
+    log.ok("resolve_brand", { brandId });
+
+    const result = await pool.query(
+      `SELECT id, slug, name, created_at, updated_at
+       FROM api_docs.services
+       WHERE brand_id = $1
+       ORDER BY name ASC`,
+      [brandId]
+    );
+    log.ok("db_list", { count: result.rowCount ?? 0 });
+    log.done(200, { count: result.rowCount ?? 0 });
+    return withRequestId(
+      NextResponse.json({ services: result.rows }),
+      log.reqId
+    );
+  } catch (err) {
+    return failResponse(
+      log,
+      "db_list",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
+    );
+  }
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ brandSlug: string }> }
 ) {
   const { brandSlug } = await params;
+  const log = createApiLogger(
+    "POST /api/brands/[brandSlug]/services",
+    req,
+    { brandSlug }
+  );
+  log.ok("start", { brandSlug });
 
   let formData: FormData;
   try {
     formData = await req.formData();
-  } catch {
-    return NextResponse.json(
-      { error: "Request must be multipart/form-data" },
-      { status: 400 }
+    log.ok("parse_form");
+  } catch (err) {
+    return failResponse(
+      log,
+      "parse_form",
+      err instanceof Error ? err : new Error("Request must be multipart/form-data"),
+      NextResponse.json(
+        { error: "Request must be multipart/form-data" },
+        { status: 400 }
+      ),
+      snapshotRequest(req, { params: { brandSlug } })
     );
   }
+
+  const snap = () => snapshotRequest(req, { params: { brandSlug }, formData });
 
   const name = formData.get("name");
   const slug = formData.get("slug");
   const file = formData.get("collection");
 
   if (!name || typeof name !== "string") {
-    return NextResponse.json({ error: "name is required" }, { status: 400 });
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("name is required"),
+      NextResponse.json({ error: "name is required" }, { status: 400 }),
+      snap()
+    );
   }
 
   if (!slug || typeof slug !== "string") {
-    return NextResponse.json({ error: "slug is required" }, { status: 400 });
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("slug is required"),
+      NextResponse.json({ error: "slug is required" }, { status: 400 }),
+      snap()
+    );
   }
 
   if (!/^[a-z0-9-]+$/.test(slug)) {
-    return NextResponse.json(
-      { error: "slug must only contain lowercase letters, numbers, and hyphens" },
-      { status: 400 }
+    return failResponse(
+      log,
+      "validate_slug",
+      new Error("slug must only contain lowercase letters, numbers, and hyphens"),
+      NextResponse.json(
+        { error: "slug must only contain lowercase letters, numbers, and hyphens" },
+        { status: 400 }
+      ),
+      snap()
     );
   }
 
   if (!file || !(file instanceof File)) {
-    return NextResponse.json(
-      { error: "collection file is required" },
-      { status: 400 }
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("collection file is required"),
+      NextResponse.json(
+        { error: "collection file is required" },
+        { status: 400 }
+      ),
+      snap()
     );
   }
 
   if (!file.name.endsWith(".json")) {
-    return NextResponse.json(
-      { error: "collection must be a .json file" },
-      { status: 400 }
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("collection must be a .json file"),
+      NextResponse.json(
+        { error: "collection must be a .json file" },
+        { status: 400 }
+      ),
+      snap(),
+      { fileName: file.name }
     );
   }
+  log.ok("validate_fields", {
+    name,
+    slug,
+    fileName: file.name,
+    fileSize: file.size,
+  });
 
   let postmanCollection: object;
   try {
     const text = await file.text();
     postmanCollection = JSON.parse(text);
-  } catch {
-    return NextResponse.json(
-      { error: "collection file is not valid JSON" },
-      { status: 400 }
+    log.ok("parse_collection_json", { bytes: text.length });
+  } catch (err) {
+    return failResponse(
+      log,
+      "parse_collection_json",
+      err instanceof Error ? err : new Error("collection file is not valid JSON"),
+      NextResponse.json(
+        { error: "collection file is not valid JSON" },
+        { status: 400 }
+      ),
+      snap()
     );
   }
 
@@ -86,32 +212,51 @@ export async function POST(
   );
 
   if (brandResult.rowCount === 0) {
-    return NextResponse.json(
-      { error: `brand "${brandSlug}" not found` },
-      { status: 404 }
+    return failResponse(
+      log,
+      "resolve_brand",
+      new Error(`brand "${brandSlug}" not found`),
+      NextResponse.json(
+        { error: `brand "${brandSlug}" not found` },
+        { status: 404 }
+      ),
+      snap()
     );
   }
 
   const brandId = brandResult.rows[0].id;
+  log.ok("resolve_brand", { brandId });
 
   let openapiSpec: object;
   try {
     openapiSpec = await convertPostmanToOpenApi(postmanCollection);
+    log.ok("convert_postman", {
+      pathCount: Object.keys(
+        (openapiSpec as { paths?: Record<string, unknown> }).paths ?? {}
+      ).length,
+    });
   } catch (err) {
-    console.error("Conversion error:", err);
-    return NextResponse.json(
-      {
-        error:
-          "Failed to convert Postman collection to OpenAPI. Check that your collection is valid.",
-      },
-      { status: 422 }
+    return failResponse(
+      log,
+      "convert_postman",
+      err,
+      NextResponse.json(
+        {
+          error:
+            "Failed to convert Postman collection to OpenAPI. Check that your collection is valid.",
+        },
+        { status: 422 }
+      ),
+      snap()
     );
   }
 
   const client = await pool.connect();
   try {
     await ensureVersionsTable();
+    log.ok("ensure_versions_table");
     await client.query("BEGIN");
+    log.ok("db_begin");
 
     const existing = await client.query(
       `SELECT id, openapi_spec FROM api_docs.services
@@ -139,8 +284,14 @@ export async function POST(
       ? { added: [], removed: [], changed: [] }
       : diffOpenApiSpecs(previousSpec, openapiSpec);
 
-    // Skip version row when re-upload has no API surface changes (still update service)
     const shouldRecordVersion = isInitial || !isEmptyDiff(diff);
+    log.ok("diff_openapi", {
+      isInitial,
+      shouldRecordVersion,
+      added: diff.added.length,
+      removed: diff.removed.length,
+      changed: diff.changed.length,
+    });
 
     const result = await client.query(
       `INSERT INTO api_docs.services (brand_id, slug, name, openapi_spec, source_collection)
@@ -161,6 +312,7 @@ export async function POST(
     );
 
     const service = result.rows[0];
+    log.ok("db_upsert_service", { serviceId: service.id, slug: service.slug });
 
     if (shouldRecordVersion) {
       await client.query(
@@ -174,16 +326,26 @@ export async function POST(
           isInitial,
         ]
       );
+      log.ok("db_insert_version", { isInitial });
+    } else {
+      log.ok("db_insert_version_skipped", { reason: "empty_diff" });
     }
 
     await client.query("COMMIT");
-    return NextResponse.json({ service }, { status: 201 });
+    log.ok("db_commit");
+    log.done(201, { serviceId: service.id, slug: service.slug });
+    return withRequestId(
+      NextResponse.json({ service }, { status: 201 }),
+      log.reqId
+    );
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    console.error("Upsert service error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
+    return failResponse(
+      log,
+      "db_upsert",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
     );
   } finally {
     client.release();

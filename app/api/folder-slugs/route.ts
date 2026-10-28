@@ -1,7 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { listFolderTree } from "@/lib/folder-access";
 import type { PostmanCollection } from "@/lib/postman-types";
+import {
+  createApiLogger,
+  failResponse,
+  snapshotRequest,
+  withRequestId,
+} from "@/lib/api-logger";
 
 /**
  * GET /api/folder-slugs
@@ -9,7 +15,10 @@ import type { PostmanCollection } from "@/lib/postman-types";
  * Use each node's `path` in doc_clients.folder_allowlist
  * (e.g. "onboarding", "a/c/h", "a/c/all").
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const log = createApiLogger("GET /api/folder-slugs", req);
+  log.ok("start");
+
   try {
     const result = await pool.query(
       `SELECT
@@ -22,6 +31,7 @@ export async function GET() {
        JOIN api_docs.services s ON s.brand_id = b.id
        ORDER BY b.name ASC, s.name ASC`
     );
+    log.ok("db_query", { rows: result.rowCount ?? 0 });
 
     type BrandBucket = {
       slug: string;
@@ -54,24 +64,31 @@ export async function GET() {
         ),
       });
     }
+    log.ok("build_tree", { brandCount: byBrand.size });
+    log.done(200, { brandCount: byBrand.size });
 
-    return NextResponse.json({
-      brands: [...byBrand.values()],
-      meta: {
-        max_depth: 3,
-        allowlist_notes: [
-          '[] or ["all"] = entire collection',
-          '"a" = folder A and everything under it',
-          '"a/c/h" = folder H under A/C (and deeper content)',
-          '"a/c/all" = every direct child of C under A',
-        ],
-      },
-    });
+    return withRequestId(
+      NextResponse.json({
+        brands: [...byBrand.values()],
+        meta: {
+          max_depth: 3,
+          allowlist_notes: [
+            '[] or ["all"] = entire collection',
+            '"a" = folder A and everything under it',
+            '"a/c/h" = folder H under A/C (and deeper content)',
+            '"a/c/all" = every direct child of C under A',
+          ],
+        },
+      }),
+      log.reqId
+    );
   } catch (err) {
-    console.error("List folder slugs error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
+    return failResponse(
+      log,
+      "db_query",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snapshotRequest(req)
     );
   }
 }

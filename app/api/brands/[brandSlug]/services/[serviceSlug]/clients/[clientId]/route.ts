@@ -4,6 +4,12 @@ import {
   isUuid,
   normalizeAllowlistForStorage,
 } from "@/lib/folder-access";
+import {
+  createApiLogger,
+  failResponse,
+  snapshotRequest,
+  withRequestId,
+} from "@/lib/api-logger";
 
 async function resolveClient(
   brandSlug: string,
@@ -24,7 +30,11 @@ async function resolveClient(
   return result.rows[0];
 }
 
-function mapClientRow(row: Record<string, unknown>) {
+function mapClientRow(
+  row: Record<string, unknown>,
+  brandSlug: string,
+  serviceSlug: string
+) {
   return {
     id: row.id,
     name: row.name,
@@ -33,6 +43,7 @@ function mapClientRow(row: Record<string, unknown>) {
     service_id: row.service_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    docs_url: `/${brandSlug}/${serviceSlug}/${row.id}`,
   };
 }
 
@@ -50,20 +61,57 @@ export async function PATCH(
   }
 ) {
   const { brandSlug, serviceSlug, clientId } = await params;
+  const log = createApiLogger(
+    "PATCH /api/brands/[brandSlug]/services/[serviceSlug]/clients/[clientId]",
+    req,
+    { brandSlug, serviceSlug, clientId }
+  );
+  log.ok("start", { brandSlug, serviceSlug, clientId });
+
   const existing = await resolveClient(brandSlug, serviceSlug, clientId);
   if (!existing) {
-    return NextResponse.json({ error: "Client not found" }, { status: 404 });
+    return failResponse(
+      log,
+      "resolve_client",
+      new Error("Client not found"),
+      NextResponse.json({ error: "Client not found" }, { status: 404 }),
+      snapshotRequest(req, {
+        params: { brandSlug, serviceSlug, clientId },
+      })
+    );
   }
+  log.ok("resolve_client", { clientId: existing.id });
 
   let body: unknown;
   try {
     body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "JSON body required" }, { status: 400 });
+    log.ok("parse_json");
+  } catch (err) {
+    return failResponse(
+      log,
+      "parse_json",
+      err instanceof Error ? err : new Error("JSON body required"),
+      NextResponse.json({ error: "JSON body required" }, { status: 400 }),
+      snapshotRequest(req, {
+        params: { brandSlug, serviceSlug, clientId },
+      })
+    );
   }
 
+  const snap = () =>
+    snapshotRequest(req, {
+      params: { brandSlug, serviceSlug, clientId },
+      jsonBody: body,
+    });
+
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return NextResponse.json({ error: "Body must be a JSON object" }, { status: 400 });
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("Body must be a JSON object"),
+      NextResponse.json({ error: "Body must be a JSON object" }, { status: 400 }),
+      snap()
+    );
   }
 
   const obj = body as Record<string, unknown>;
@@ -71,24 +119,43 @@ export async function PATCH(
   const hasAllowlist = obj.folder_allowlist !== undefined;
 
   if (!hasName && !hasAllowlist) {
-    return NextResponse.json(
-      { error: "Provide name and/or folder_allowlist" },
-      { status: 400 }
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("Provide name and/or folder_allowlist"),
+      NextResponse.json(
+        { error: "Provide name and/or folder_allowlist" },
+        { status: 400 }
+      ),
+      snap()
     );
   }
 
   if (hasName && !(obj.name as string).trim()) {
-    return NextResponse.json({ error: "name cannot be empty" }, { status: 400 });
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("name cannot be empty"),
+      NextResponse.json({ error: "name cannot be empty" }, { status: 400 }),
+      snap()
+    );
   }
 
   let allowlistJson: string | undefined;
   if (hasAllowlist) {
     const normalized = normalizeAllowlistForStorage(obj.folder_allowlist);
     if ("error" in normalized) {
-      return NextResponse.json({ error: normalized.error }, { status: 400 });
+      return failResponse(
+        log,
+        "validate_allowlist",
+        new Error(normalized.error),
+        NextResponse.json({ error: normalized.error }, { status: 400 }),
+        snap()
+      );
     }
     allowlistJson = JSON.stringify(normalized);
   }
+  log.ok("validate_fields", { hasName, hasAllowlist });
 
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -113,19 +180,28 @@ export async function PATCH(
       values
     );
 
-    return NextResponse.json({
-      client: mapClientRow(result.rows[0]),
-      docs_url: `/${brandSlug}/${serviceSlug}/${clientId}`,
-    });
+    log.ok("db_update", { clientId });
+    log.done(200, { clientId });
+    return withRequestId(
+      NextResponse.json({
+        client: mapClientRow(result.rows[0], brandSlug, serviceSlug),
+      }),
+      log.reqId
+    );
   } catch (err) {
-    console.error("Update doc_client error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return failResponse(
+      log,
+      "db_update",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
+    );
   }
 }
 
 /** DELETE */
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   {
     params,
   }: {
@@ -137,32 +213,72 @@ export async function DELETE(
   }
 ) {
   const { brandSlug, serviceSlug, clientId } = await params;
-  if (!isUuid(clientId)) {
-    return NextResponse.json({ error: "Client not found" }, { status: 404 });
-  }
-
-  const result = await pool.query(
-    `DELETE FROM api_docs.doc_clients c
-     USING api_docs.services s, api_docs.brands b
-     WHERE c.id = $3
-       AND c.service_id = s.id
-       AND c.brand_id = b.id
-       AND b.slug = $1
-       AND s.slug = $2
-     RETURNING c.id`,
-    [brandSlug, serviceSlug, clientId]
+  const log = createApiLogger(
+    "DELETE /api/brands/[brandSlug]/services/[serviceSlug]/clients/[clientId]",
+    req,
+    { brandSlug, serviceSlug, clientId }
   );
+  log.ok("start", { brandSlug, serviceSlug, clientId });
 
-  if (result.rowCount === 0) {
-    return NextResponse.json({ error: "Client not found" }, { status: 404 });
+  const snap = () =>
+    snapshotRequest(req, {
+      params: { brandSlug, serviceSlug, clientId },
+    });
+
+  if (!isUuid(clientId)) {
+    return failResponse(
+      log,
+      "validate_client_id",
+      new Error("Client not found"),
+      NextResponse.json({ error: "Client not found" }, { status: 404 }),
+      snap()
+    );
   }
+  log.ok("validate_client_id");
 
-  return NextResponse.json({ ok: true, id: result.rows[0].id });
+  try {
+    const result = await pool.query(
+      `DELETE FROM api_docs.doc_clients c
+       USING api_docs.services s, api_docs.brands b
+       WHERE c.id = $3
+         AND c.service_id = s.id
+         AND c.brand_id = b.id
+         AND b.slug = $1
+         AND s.slug = $2
+       RETURNING c.id`,
+      [brandSlug, serviceSlug, clientId]
+    );
+
+    if (result.rowCount === 0) {
+      return failResponse(
+        log,
+        "db_delete",
+        new Error("Client not found"),
+        NextResponse.json({ error: "Client not found" }, { status: 404 }),
+        snap()
+      );
+    }
+
+    log.ok("db_delete", { clientId: result.rows[0].id });
+    log.done(200, { clientId: result.rows[0].id });
+    return withRequestId(
+      NextResponse.json({ ok: true, id: result.rows[0].id }),
+      log.reqId
+    );
+  } catch (err) {
+    return failResponse(
+      log,
+      "db_delete",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
+    );
+  }
 }
 
 /** GET one client */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   {
     params,
   }: {
@@ -174,12 +290,31 @@ export async function GET(
   }
 ) {
   const { brandSlug, serviceSlug, clientId } = await params;
+  const log = createApiLogger(
+    "GET /api/brands/[brandSlug]/services/[serviceSlug]/clients/[clientId]",
+    req,
+    { brandSlug, serviceSlug, clientId }
+  );
+  log.ok("start", { brandSlug, serviceSlug, clientId });
+
   const existing = await resolveClient(brandSlug, serviceSlug, clientId);
   if (!existing) {
-    return NextResponse.json({ error: "Client not found" }, { status: 404 });
+    return failResponse(
+      log,
+      "resolve_client",
+      new Error("Client not found"),
+      NextResponse.json({ error: "Client not found" }, { status: 404 }),
+      snapshotRequest(req, {
+        params: { brandSlug, serviceSlug, clientId },
+      })
+    );
   }
-  return NextResponse.json({
-    client: mapClientRow(existing),
-    docs_url: `/${brandSlug}/${serviceSlug}/${clientId}`,
-  });
+  log.ok("resolve_client", { clientId: existing.id });
+  log.done(200, { clientId: existing.id });
+  return withRequestId(
+    NextResponse.json({
+      client: mapClientRow(existing, brandSlug, serviceSlug),
+    }),
+    log.reqId
+  );
 }

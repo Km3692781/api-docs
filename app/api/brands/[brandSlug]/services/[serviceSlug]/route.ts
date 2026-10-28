@@ -3,6 +3,12 @@ import { pool } from "@/lib/db";
 import { convertPostmanToOpenApi } from "@/lib/converter";
 import { diffOpenApiSpecs, isEmptyDiff } from "@/lib/openapi-diff";
 import { isPgUniqueViolation, validateSlug } from "@/lib/form-validators";
+import {
+  createApiLogger,
+  failResponse,
+  snapshotRequest,
+  withRequestId,
+} from "@/lib/api-logger";
 
 async function ensureVersionsTable() {
   await pool.query(`
@@ -21,6 +27,70 @@ async function ensureVersionsTable() {
   `);
 }
 
+/** DELETE /api/brands/:brand/:service — cascades versions + clients */
+export async function DELETE(
+  req: NextRequest,
+  {
+    params,
+  }: { params: Promise<{ brandSlug: string; serviceSlug: string }> }
+) {
+  const { brandSlug, serviceSlug } = await params;
+  const log = createApiLogger(
+    "DELETE /api/brands/[brandSlug]/services/[serviceSlug]",
+    req,
+    { brandSlug, serviceSlug }
+  );
+  log.ok("start", { brandSlug, serviceSlug });
+
+  const snap = () =>
+    snapshotRequest(req, { params: { brandSlug, serviceSlug } });
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM api_docs.services s
+       USING api_docs.brands b
+       WHERE s.brand_id = b.id
+         AND b.slug = $1
+         AND s.slug = $2
+       RETURNING s.id, s.slug, s.name`,
+      [brandSlug, serviceSlug]
+    );
+
+    if (result.rowCount === 0) {
+      return failResponse(
+        log,
+        "db_delete",
+        new Error(
+          `service "${serviceSlug}" not found for brand "${brandSlug}"`
+        ),
+        NextResponse.json(
+          {
+            error: `service "${serviceSlug}" not found for brand "${brandSlug}"`,
+          },
+          { status: 404 }
+        ),
+        snap()
+      );
+    }
+
+    const service = result.rows[0];
+    log.ok("db_delete", { serviceId: service.id, slug: service.slug });
+    log.done(200, { serviceId: service.id });
+    return withRequestId(
+      NextResponse.json({ ok: true, service }),
+      log.reqId
+    );
+  } catch (err) {
+    return failResponse(
+      log,
+      "db_delete",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
+    );
+  }
+}
+
 export async function PATCH(
   req: NextRequest,
   {
@@ -28,16 +98,34 @@ export async function PATCH(
   }: { params: Promise<{ brandSlug: string; serviceSlug: string }> }
 ) {
   const { brandSlug, serviceSlug } = await params;
+  const log = createApiLogger(
+    "PATCH /api/brands/[brandSlug]/services/[serviceSlug]",
+    req,
+    { brandSlug, serviceSlug }
+  );
+  log.ok("start", { brandSlug, serviceSlug });
 
   let formData: FormData;
   try {
     formData = await req.formData();
-  } catch {
-    return NextResponse.json(
-      { error: "Request must be multipart/form-data" },
-      { status: 400 }
+    log.ok("parse_form");
+  } catch (err) {
+    return failResponse(
+      log,
+      "parse_form",
+      err instanceof Error
+        ? err
+        : new Error("Request must be multipart/form-data"),
+      NextResponse.json(
+        { error: "Request must be multipart/form-data" },
+        { status: 400 }
+      ),
+      snapshotRequest(req, { params: { brandSlug, serviceSlug } })
     );
   }
+
+  const snap = () =>
+    snapshotRequest(req, { params: { brandSlug, serviceSlug }, formData });
 
   const name = formData.get("name");
   const slug = formData.get("slug");
@@ -48,49 +136,88 @@ export async function PATCH(
   const hasCollection = file instanceof File && file.size > 0;
 
   if (!hasName && !hasSlug && !hasCollection) {
-    return NextResponse.json(
-      { error: "Provide at least one of: name, slug, collection" },
-      { status: 400 }
+    return failResponse(
+      log,
+      "validate_fields",
+      new Error("Provide at least one of: name, slug, collection"),
+      NextResponse.json(
+        { error: "Provide at least one of: name, slug, collection" },
+        { status: 400 }
+      ),
+      snap()
     );
   }
 
   if (hasSlug) {
     const slugErr = validateSlug(slug as string);
     if (slugErr) {
-      return NextResponse.json({ error: slugErr }, { status: 400 });
+      return failResponse(
+        log,
+        "validate_slug",
+        new Error(slugErr),
+        NextResponse.json({ error: slugErr }, { status: 400 }),
+        snap()
+      );
     }
   }
+  log.ok("validate_fields", { hasName, hasSlug, hasCollection });
 
   let postmanCollection: object | undefined;
   let openapiSpec: object | undefined;
 
   if (hasCollection) {
     if (!(file as File).name.endsWith(".json")) {
-      return NextResponse.json(
-        { error: "collection must be a .json file" },
-        { status: 400 }
+      return failResponse(
+        log,
+        "validate_collection",
+        new Error("collection must be a .json file"),
+        NextResponse.json(
+          { error: "collection must be a .json file" },
+          { status: 400 }
+        ),
+        snap(),
+        { fileName: (file as File).name }
       );
     }
     try {
       const text = await (file as File).text();
       postmanCollection = JSON.parse(text);
-    } catch {
-      return NextResponse.json(
-        { error: "collection file is not valid JSON" },
-        { status: 400 }
+      log.ok("parse_collection_json", { bytes: text.length });
+    } catch (err) {
+      return failResponse(
+        log,
+        "parse_collection_json",
+        err instanceof Error
+          ? err
+          : new Error("collection file is not valid JSON"),
+        NextResponse.json(
+          { error: "collection file is not valid JSON" },
+          { status: 400 }
+        ),
+        snap()
       );
     }
 
     try {
       openapiSpec = await convertPostmanToOpenApi(postmanCollection!);
+      log.ok("convert_postman", {
+        pathCount: Object.keys(
+          (openapiSpec as { paths?: Record<string, unknown> }).paths ?? {}
+        ).length,
+      });
     } catch (err) {
-      console.error("Conversion error:", err);
-      return NextResponse.json(
-        {
-          error:
-            "Failed to convert Postman collection to OpenAPI. Check that your collection is valid.",
-        },
-        { status: 422 }
+      return failResponse(
+        log,
+        "convert_postman",
+        err,
+        NextResponse.json(
+          {
+            error:
+              "Failed to convert Postman collection to OpenAPI. Check that your collection is valid.",
+          },
+          { status: 422 }
+        ),
+        snap()
       );
     }
   }
@@ -98,7 +225,9 @@ export async function PATCH(
   const client = await pool.connect();
   try {
     await ensureVersionsTable();
+    log.ok("ensure_versions_table");
     await client.query("BEGIN");
+    log.ok("db_begin");
 
     const existing = await client.query(
       `SELECT s.id, s.slug, s.name, s.openapi_spec, s.source_collection
@@ -111,13 +240,22 @@ export async function PATCH(
 
     if (existing.rowCount === 0) {
       await client.query("ROLLBACK");
-      return NextResponse.json(
-        {
-          error: `service "${serviceSlug}" not found for brand "${brandSlug}"`,
-        },
-        { status: 404 }
+      return failResponse(
+        log,
+        "resolve_service",
+        new Error(
+          `service "${serviceSlug}" not found for brand "${brandSlug}"`
+        ),
+        NextResponse.json(
+          {
+            error: `service "${serviceSlug}" not found for brand "${brandSlug}"`,
+          },
+          { status: 404 }
+        ),
+        snap()
       );
     }
+    log.ok("resolve_service", { serviceId: existing.rows[0].id });
 
     const row = existing.rows[0];
     const sets: string[] = [];
@@ -150,6 +288,7 @@ export async function PATCH(
     );
 
     const service = result.rows[0];
+    log.ok("db_update_service", { serviceId: service.id, slug: service.slug });
 
     if (hasCollection && openapiSpec) {
       const countResult = await client.query(
@@ -162,6 +301,13 @@ export async function PATCH(
         ? { added: [], removed: [], changed: [] }
         : diffOpenApiSpecs(row.openapi_spec, openapiSpec);
       const shouldRecordVersion = isInitial || !isEmptyDiff(diff);
+      log.ok("diff_openapi", {
+        isInitial,
+        shouldRecordVersion,
+        added: diff.added.length,
+        removed: diff.removed.length,
+        changed: diff.changed.length,
+      });
 
       if (shouldRecordVersion) {
         await client.query(
@@ -175,25 +321,38 @@ export async function PATCH(
             isInitial,
           ]
         );
+        log.ok("db_insert_version", { isInitial });
+      } else {
+        log.ok("db_insert_version_skipped", { reason: "empty_diff" });
       }
     }
 
     await client.query("COMMIT");
-    return NextResponse.json({ service });
+    log.ok("db_commit");
+    log.done(200, { serviceId: service.id, slug: service.slug });
+    return withRequestId(NextResponse.json({ service }), log.reqId);
   } catch (err: unknown) {
     await client.query("ROLLBACK").catch(() => {});
     if (isPgUniqueViolation(err)) {
-      return NextResponse.json(
-        {
-          error: `service with slug "${slug}" already exists for this brand`,
-        },
-        { status: 409 }
+      return failResponse(
+        log,
+        "db_update",
+        err,
+        NextResponse.json(
+          {
+            error: `service with slug "${slug}" already exists for this brand`,
+          },
+          { status: 409 }
+        ),
+        snap()
       );
     }
-    console.error("Update service error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
+    return failResponse(
+      log,
+      "db_update",
+      err,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 }),
+      snap()
     );
   } finally {
     client.release();
